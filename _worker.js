@@ -1,4 +1,4 @@
-﻿const Version = '2026-10-08 22:23:27';
+const Version = '2026-10-08 22:23:27';
 let config_JSON, 缓存SOCKS5白名单 = null, 调试日志打印 = false;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
 const Pages静态页面 = 'https://edt-pages.github.io', EDT_版本号 = Number(String(Version).replace(/\D+/g, ''));
@@ -41,7 +41,8 @@ export default {
 		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
 		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
 		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
-		let 默认反代IP = (`${request.cf.colo}.${特征码字典[0]}.${特征码字典[1]}SsSs.nEt`).toLowerCase(), 默认反代兜底 = true;
+		// 默认纯直连模式：不使用第三方默认反代，仅在显式配置 PROXYIP 环境变量时启用反代
+		let 默认反代IP = '', 默认反代兜底 = false;
 		if (env.PROXYIP) {
 			const proxyIPs = await 整理成数组(env.PROXYIP);
 			默认反代IP = proxyIPs[Math.floor(Math.random() * proxyIPs.length)];
@@ -2403,6 +2404,10 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 						finally { try { writer.releaseLock() } catch (e) { } }
 					}
 				} else {
+					if (!ctx反代IP) {
+						log(`[反代连接] 未配置 ProxyIP，终止连接`);
+						throw new Error('[反代连接] 未配置 ProxyIP 且已禁用第三方默认反代，连接终止');
+					}
 					log(`[反代连接] 代理到: ${host}:${portNum}`);
 					const 所有反代数组 = await 解析地址端口(ctx反代IP, host, yourUUID);
 					newSocket = await connectProxyIP(`${特征码字典[0]}.tp1.${特征码字典[2]}.xyz`, 1, 本次首包数据, 所有反代数组, ctx反代兜底);
@@ -2448,7 +2453,10 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 			const initialSocket = await connectDirect(host, portNum, rawData, true);
 			await 安装当前连接(initialSocket, 直连世代, 世代连接.downlinkDrain, async () => {
 				if (remoteConnWrapper.generation !== 直连世代 || remoteConnWrapper.socket !== initialSocket) return;
-				await connecttoPry();
+				// 仅在明确配置了反代或代理时才尝试回退
+				if (ctx反代IP || 使用木马反代 || ctx代理类型) {
+					await connecttoPry();
+				}
 			});
 			if (仅建立连接) return initialSocket;
 		} catch (err) {
@@ -2459,8 +2467,14 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 				throw err;
 			}
 			if (ws.readyState !== WebSocket.OPEN) throw err;
-			await connecttoPry();
-			if (仅建立连接) return remoteConnWrapper.socket;
+			// 仅在明确配置了反代或代理时才尝试回退，纯直连模式下直接报错关闭
+			if (ctx反代IP || 使用木马反代 || ctx代理类型) {
+				await connecttoPry();
+				if (仅建立连接) return remoteConnWrapper.socket;
+			} else {
+				closeSocketQuietly(ws);
+				throw err;
+			}
 		}
 	}
 }
@@ -6171,7 +6185,7 @@ async function 请求优选API(urls, 默认端口 = '443', uid = "000000", 超�
 	return [Array.from(results), LINK数组, 需要订阅转换订阅URLs, Array.from(反代IP池)];
 }
 
-async function 反代参数获取(url, uuid, 默认反代IP = '', 默认反代兜底 = true) {
+async function 反代参数获取(url, uuid, 默认反代IP = '', 默认反代兜底 = false) {
 	const { searchParams } = url;
 	const pathname = decodeURIComponent(url.pathname);
 	const pathLower = pathname.toLowerCase();
