@@ -401,7 +401,11 @@ export default {
 							}
 							const ECHLINK参数 = config_JSON.ECH ? `&ech=${encodeURIComponent((config_JSON.ECHConfig.SNI ? config_JSON.ECHConfig.SNI + '+' : '') + config_JSON.ECHConfig.DNS)}` : '';
 							const isLoonOrSurge = ua.includes('loon') || ua.includes('surge');
-							const { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
+							let { type: 传输协议, 路径字段名, 域名字段名 } = 获取传输协议配置(config_JSON);
+							if (config_JSON.传输协议 === 'xhttp' && (url.searchParams.has('for_subconverter') || ua.includes('subconverter') || request.headers.get('subconverter-request'))) {
+								// 借道 ws 供第三方 subconverter 顺利解析与保留节点，转换返回后再经由 Clash订阅配置文件热补丁 无缝还原为完整 xhttp 配置
+								传输协议 = 'ws';
+							}
 							订阅内容 = 其他节点LINK + 完整优选IP.map(原始地址 => {
 								// 统一正则: 匹配 域名/IPv4/IPv6地址 + 可选端口 + 可选备注
 								// 示例:
@@ -456,7 +460,7 @@ export default {
 								}
 							}).filter(item => item !== null).join('\n');
 						} else { // 订阅转换
-							const 订阅转换URL = `${config_JSON.订阅转换配置.SUBAPI}/sub?target=${订阅类型}&url=${encodeURIComponent(url.protocol + '//' + url.host + '/sub?target=mixed&token=' + 今日订阅转换后端专属TOKEN + '&cnIspCode=' + 识别运营商(request) + (url.searchParams.has('sub') && url.searchParams.get('sub') != '' ? `&sub=${url.searchParams.get('sub')}` : ''))}&config=${encodeURIComponent(config_JSON.订阅转换配置.SUBCONFIG)}&emoji=${config_JSON.订阅转换配置.SUBEMOJI}&list=${config_JSON.订阅转换配置.SUBLIST}&scv=${config_JSON.跳过证书验证}&xudp=${config_JSON.订阅转换配置.XUDP}&udp=${config_JSON.订阅转换配置.UDP}&tls13=${config_JSON.订阅转换配置.TLS13}&append_type=${config_JSON.订阅转换配置.APPEND_TYPE}&sort=${config_JSON.订阅转换配置.SORT}&expand=${config_JSON.订阅转换配置.EXPAND}`;
+							const 订阅转换URL = `${config_JSON.订阅转换配置.SUBAPI}/sub?target=${订阅类型}&url=${encodeURIComponent(url.protocol + '//' + url.host + '/sub?target=mixed&token=' + 今日订阅转换后端专属TOKEN + '&cnIspCode=' + 识别运营商(request) + (url.searchParams.has('sub') && url.searchParams.get('sub') != '' ? `&sub=${url.searchParams.get('sub')}` : '') + (config_JSON.传输协议 === 'xhttp' ? '&for_subconverter=1' : ''))}&config=${encodeURIComponent(config_JSON.订阅转换配置.SUBCONFIG)}&emoji=${config_JSON.订阅转换配置.SUBEMOJI}&list=${config_JSON.订阅转换配置.SUBLIST}&scv=${config_JSON.跳过证书验证}&xudp=${config_JSON.订阅转换配置.XUDP}&udp=${config_JSON.订阅转换配置.UDP}&tls13=${config_JSON.订阅转换配置.TLS13}&append_type=${config_JSON.订阅转换配置.APPEND_TYPE}&sort=${config_JSON.订阅转换配置.SORT}&expand=${config_JSON.订阅转换配置.EXPAND}`;
 							try {
 								const response = await fetch(订阅转换URL, { headers: { 'User-Agent': 'Subconverter for ' + 订阅类型 + ' edge' + 'tunnel (https://github.com/' + 特征码字典[1] + '/edge' + 'tunnel) Uid/0x' + 本机标识头 + ' Version/' + EDT_版本号 } });
 								if (response.ok) {
@@ -581,7 +585,8 @@ function 校验叉HTTPPadding(request, 本机标识头, 本机标识键) {
 	const padding值 = 提取叉HTTPPadding值(request, 本机标识头, 本机标识键);
 	if (!padding值) return true;
 	const huffman长度 = 计算HPACKHuffman字节长度(padding值);
-	return huffman长度 >= 98 && huffman长度 <= 1002;
+	// 放宽 padding 校验范围，兼容不同客户端的填充实现
+	return huffman长度 >= 10 && huffman长度 <= 4096;
 }
 
 const 叉HTTPBase62字符集 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
@@ -4842,6 +4847,10 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 	const gRPCUserAgent = (typeof config_JSON?.gRPCUserAgent === 'string' && config_JSON.gRPCUserAgent.trim()) ? config_JSON.gRPCUserAgent.trim() : null;
 	const 需要处理gRPC = config_JSON?.传输协议 === "grpc" && Boolean(gRPCUserAgent);
 	const gRPCUserAgentYAML = gRPCUserAgent ? JSON.stringify(gRPCUserAgent) : null;
+	const 需要处理XHTTP = config_JSON?.传输协议 === "xhttp" && Boolean(uuid);
+	const [本机标识头, 本机标识键] = (需要处理XHTTP && uuid) ? 获取本机标识(uuid) : ['', ''];
+	const 叉HTTPPadding = 本机标识头 ? 生成叉HTTPPadding串(200) : '';
+	const xhttpPath = config_JSON?.完整节点路径 || '/';
 	let clash_yaml = Clash_原始订阅内容.replace(/mode:\s*Rule\b/g, 'mode: rule');
 
 	const baseDnsBlock = `dns:
@@ -4977,6 +4986,77 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 		nodeLines.splice(insertIndex + 1, 0, ...echOptsLines);
 		return nodeLines;
 	};
+	const 添加Flow格式XHTTP = (nodeText) => {
+		if (获取凭据值(nodeText, true) !== uuid.trim()) return nodeText;
+		if (/network:\s*[^,}]+/i.test(nodeText)) {
+			nodeText = nodeText.replace(/network:\s*[^,}]+/i, 'network: xhttp');
+		} else {
+			nodeText = nodeText.replace(/\}(\s*)$/, `, network: xhttp}$1`);
+		}
+		nodeText = nodeText.replace(/,?\s*ws-opts:\s*\{[^}]*\}/i, '');
+		nodeText = nodeText.replace(/,?\s*xhttp-opts:\s*\{[^}]*\}/i, '');
+		nodeText = nodeText.replace(/,?\s*splithttp-opts:\s*\{[^}]*\}/i, '');
+		const optsContent = `mode: stream-one, path: "${xhttpPath}", headers: {${本机标识头}: "${叉HTTPPadding}"}`;
+		return nodeText.replace(/\}(\s*)$/, `, xhttp-opts: {${optsContent}}, splithttp-opts: {${optsContent}}}$1`);
+	};
+	const 添加Block格式XHTTP = (nodeLines, topLevelIndent) => {
+		const 顶级缩进 = ' '.repeat(topLevelIndent);
+		const 子级缩进 = ' '.repeat(topLevelIndent + 2);
+		const 三级缩进 = ' '.repeat(topLevelIndent + 4);
+		let networkIndex = -1;
+		for (let idx = 0; idx < nodeLines.length; idx++) {
+			const line = nodeLines[idx];
+			if (line.search(/\S/) === topLevelIndent && /^\s*network:\s*/i.test(line)) {
+				networkIndex = idx;
+				break;
+			}
+		}
+		if (networkIndex !== -1) {
+			nodeLines[networkIndex] = `${顶级缩进}network: xhttp`;
+		} else {
+			nodeLines.splice(1, 0, `${顶级缩进}network: xhttp`);
+		}
+		let cleanLines = [];
+		let skipBlock = false;
+		for (let idx = 0; idx < nodeLines.length; idx++) {
+			const line = nodeLines[idx];
+			const trimmed = line.trim();
+			const indent = line.search(/\S/);
+			if (indent === topLevelIndent && /^(?:ws-opts|xhttp-opts|splithttp-opts):\s*$/i.test(trimmed)) {
+				skipBlock = true;
+				continue;
+			}
+			if (skipBlock) {
+				if (indent > topLevelIndent) continue;
+				skipBlock = false;
+			}
+			cleanLines.push(line);
+		}
+		nodeLines = cleanLines;
+		let insertIndex = -1;
+		for (let j = nodeLines.length - 1; j >= 0; j--) {
+			if (nodeLines[j].trim()) {
+				insertIndex = j;
+				break;
+			}
+		}
+		const xhttpLines = [
+			`${顶级缩进}xhttp-opts:`,
+			`${子级缩进}mode: stream-one`,
+			`${子级缩进}path: "${xhttpPath}"`,
+			`${子级缩进}headers:`,
+			`${三级缩进}${本机标识头}: "${叉HTTPPadding}"`,
+			`${顶级缩进}splithttp-opts:`,
+			`${子级缩进}mode: stream-one`,
+			`${子级缩进}path: "${xhttpPath}"`,
+			`${子级缩进}headers:`,
+			`${三级缩进}${本机标识头}: "${叉HTTPPadding}"`
+		];
+		if (insertIndex >= 0) {
+			nodeLines.splice(insertIndex + 1, 0, ...xhttpLines);
+		}
+		return nodeLines;
+	};
 
 	if (!/^dns:\s*(?:\n|$)/m.test(clash_yaml)) clash_yaml = baseDnsBlock + clash_yaml;
 	if (ECH_SNI && !HOSTS.includes(ECH_SNI)) HOSTS.push(ECH_SNI);
@@ -4986,7 +5066,7 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 		clash_yaml = 插入NameserverPolicy(clash_yaml, hostsEntries);
 	}
 
-	if (!需要处理ECH && !需要处理gRPC) return clash_yaml;
+	if (!需要处理ECH && !需要处理gRPC && !需要处理XHTTP) return clash_yaml;
 
 	const lines = clash_yaml.split('\n');
 	const processedLines = [];
@@ -5005,6 +5085,7 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 				braceCount += (lines[i].match(/\{/g) || []).length - (lines[i].match(/\}/g) || []).length;
 			}
 			if (需要处理gRPC) fullNode = 添加Flow格式gRPCUserAgent(fullNode);
+			if (需要处理XHTTP) fullNode = 添加Flow格式XHTTP(fullNode);
 			if (需要处理ECH && 获取凭据值(fullNode, true) === uuid.trim()) {
 				fullNode = fullNode.replace(/\}(\s*)$/, `, ech-opts: {enable: true${ECH_SNI ? `, query-server-name: ${ECH_SNI}` : ''}}}$1`);
 			}
@@ -5036,6 +5117,10 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 			let nodeText = nodeLines.join('\n');
 			if (需要处理gRPC && 匹配到gRPC网络(nodeText)) {
 				nodeLines = 添加Block格式gRPCUserAgent(nodeLines, topLevelIndent);
+				nodeText = nodeLines.join('\n');
+			}
+			if (需要处理XHTTP && 获取凭据值(nodeText, false) === uuid.trim()) {
+				nodeLines = 添加Block格式XHTTP(nodeLines, topLevelIndent);
 				nodeText = nodeLines.join('\n');
 			}
 			if (需要处理ECH && 获取凭据值(nodeText, false) === uuid.trim()) nodeLines = 添加Block格式ECHOpts(nodeLines, topLevelIndent);
