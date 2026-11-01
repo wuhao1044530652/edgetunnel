@@ -350,7 +350,10 @@ export default {
 						if (!ua.includes('mozilla')) responseHeaders["Content-Disposition"] = `attachment; filename*=utf-8''${encodeURIComponent(config_JSON.优选订阅生成.SUBNAME)}`;
 						const 协议类型 = ((url.searchParams.has('surge') || ua.includes('surge')) && config_JSON.协议类型 !== 'ss') ? 'tro' + 'jan' : config_JSON.协议类型;
 						let 订阅内容 = '';
-						if (订阅类型 === 'mixed') {
+						const 强制远程转换 = url.searchParams.has('subapi') || url.searchParams.has('remote') || config_JSON.订阅转换配置.内置转换 === false;
+						const 走内置转换 = !强制远程转换 && (订阅类型 === 'clash' || 订阅类型 === 'singbox' || 订阅类型 === 'mixed');
+
+						if (走内置转换) {
 							const TLS分片参数 = config_JSON.TLS分片 == 'Shadowrocket' ? `&fragment=${encodeURIComponent('1,40-60,30-50,tlshello')}` : config_JSON.TLS分片 == 'Happ' ? `&fragment=${encodeURIComponent('3,1,tlshello')}` : '';
 							let 完整优选IP = [], 其他节点LINK = '', 反代IP池 = [];
 
@@ -406,27 +409,21 @@ export default {
 								// 借道 ws 供第三方 subconverter 顺利解析与保留节点，转换返回后再经由 Clash订阅配置文件热补丁 无缝还原为完整 xhttp 配置
 								传输协议 = 'ws';
 							}
-							订阅内容 = 其他节点LINK + 完整优选IP.map(原始地址 => {
-								// 统一正则: 匹配 域名/IPv4/IPv6地址 + 可选端口 + 可选备注
-								// 示例:
-								//   - 域名: hj.xmm1993.top:2096#备注 或 example.com
-								//   - IPv4: 166.0.188.128:443#Los Angeles 或 166.0.188.128
-								//   - IPv6: [2606:4700::]:443#CMCC 或 [2606:4700::]
+
+							const 结构化节点列表 = [];
+							const 原始节点URI列表 = [];
+
+							for (const 原始地址 of 完整优选IP) {
 								const regex = /^(\[[\da-fA-F:]+\]|[\d.]+|[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)*)(?::(\d+))?(?:#(.+))?$/;
 								const match = 原始地址.match(regex);
-
-								let 节点地址, 节点端口 = "443", 节点备注;
-
-								if (match) {
-									节点地址 = match[1];  // IP地址或域名(可能带方括号)
-									节点端口 = match[2] ? match[2] : '443';  // 端口默认443，SS noTLS在生成链接时再映射
-									节点备注 = match[3] || 节点地址;  // 备注,默认为地址本身
-								} else {
-									// 不规范的格式，跳过处理返回null
+								if (!match) {
 									console.warn(`[订阅内容] 不规范的IP格式已忽略: ${原始地址}`);
-									return null;
+									continue;
 								}
 
+								let 节点地址 = match[1];
+								let 节点端口 = match[2] ? match[2] : '443';
+								let 节点备注 = match[3] || 节点地址;
 								let 完整节点路径 = config_JSON.完整节点路径;
 
 								const 链式代理匹配 = 节点备注.match(/\$(socks5|http|https|turn|sstp):\/\/([^#\s]+)/i);
@@ -445,21 +442,33 @@ export default {
 								}
 								if (isLoonOrSurge) 完整节点路径 = 完整节点路径.replace(/,/g, '%2C');
 
+								结构化节点列表.push({ 节点地址, 节点端口, 节点备注, 完整节点路径 });
+
 								if (协议类型 === 'ss' && !作为优选订阅生成器) {
+									let 实际端口 = 节点端口;
 									if (!config_JSON.SS.TLS) {
 										const TLS端口 = [443, 2053, 2083, 2087, 2096, 8443];
 										const NOTLS端口 = [80, 2052, 2082, 2086, 2095, 8080];
-										节点端口 = String(NOTLS端口[TLS端口.indexOf(Number(节点端口))] ?? 节点端口);
+										实际端口 = String(NOTLS端口[TLS端口.indexOf(Number(节点端口))] ?? 节点端口);
 									}
-									完整节点路径 = (完整节点路径.includes('?') ? 完整节点路径.replace('?', '?enc=' + config_JSON.SS.加密方式 + '&') : (完整节点路径 + '?enc=' + config_JSON.SS.加密方式)).replace(/([=,])/g, '\\$1');
-									if (!isSubConverterRequest) 完整节点路径 = 完整节点路径 + ';mux=0';
-									return `${协议类型}://${btoa(config_JSON.SS.加密方式 + ':00000000-0000-4000-8000-000000000000')}@${节点地址}:${节点端口}?plugin=v2${encodeURIComponent('ray-plugin;mode=websocket;host=example.com;path=' + (config_JSON.随机路径 ? 随机路径(完整节点路径) : 完整节点路径) + (config_JSON.SS.TLS ? ';tls' : '')) + ECHLINK参数 + TLS分片参数}#${encodeURIComponent(节点备注)}`;
+									let ss路径 = (完整节点路径.includes('?') ? 完整节点路径.replace('?', '?enc=' + config_JSON.SS.加密方式 + '&') : (完整节点路径 + '?enc=' + config_JSON.SS.加密方式)).replace(/([=,])/g, '\\$1');
+									if (!isSubConverterRequest) ss路径 = ss路径 + ';mux=0';
+									原始节点URI列表.push(`${协议类型}://${btoa(config_JSON.SS.加密方式 + ':00000000-0000-4000-8000-000000000000')}@${节点地址}:${实际端口}?plugin=v2${encodeURIComponent('ray-plugin;mode=websocket;host=example.com;path=' + (config_JSON.随机路径 ? 随机路径(ss路径) : ss路径) + (config_JSON.SS.TLS ? ';tls' : '')) + ECHLINK参数 + TLS分片参数}#${encodeURIComponent(节点备注)}`);
 								} else {
 									const 传输路径参数值 = 获取传输路径参数值(config_JSON, 完整节点路径, 作为优选订阅生成器);
-									return `${协议类型}://00000000-0000-4000-8000-000000000000@${节点地址}:${节点端口}?security=tls&type=${传输协议 + ECHLINK参数}&${域名字段名}=example.com&fp=${config_JSON.Fingerprint}&sni=example.com&${路径字段名}=${encodeURIComponent(传输路径参数值) + TLS分片参数}&encryption=none&alpn=${encodeURIComponent(config_JSON.ALPN)}#${encodeURIComponent(节点备注)}`;
+									原始节点URI列表.push(`${协议类型}://00000000-0000-4000-8000-000000000000@${节点地址}:${节点端口}?security=tls&type=${传输协议 + ECHLINK参数}&${域名字段名}=example.com&fp=${config_JSON.Fingerprint}&sni=example.com&${路径字段名}=${encodeURIComponent(传输路径参数值) + TLS分片参数}&encryption=none&alpn=${encodeURIComponent(config_JSON.ALPN)}#${encodeURIComponent(节点备注)}`);
 								}
-							}).filter(item => item !== null).join('\n');
-						} else { // 订阅转换
+							}
+
+							// 本地内置转换输出对应格式
+							if (订阅类型 === 'clash') {
+								订阅内容 = 生成内置Clash订阅(结构化节点列表, config_JSON, host);
+							} else if (订阅类型 === 'singbox') {
+								订阅内容 = 生成内置Singbox订阅(结构化节点列表, config_JSON, host);
+							} else {
+								订阅内容 = 其他节点LINK + 原始节点URI列表.join('\n');
+							}
+						} else { // 远程订阅转换（通过外部 SUBAPI）
 							const 订阅转换URL = `${config_JSON.订阅转换配置.SUBAPI}/sub?target=${订阅类型}&url=${encodeURIComponent(url.protocol + '//' + url.host + '/sub?target=mixed&token=' + 今日订阅转换后端专属TOKEN + '&cnIspCode=' + 识别运营商(request) + (url.searchParams.has('sub') && url.searchParams.get('sub') != '' ? `&sub=${url.searchParams.get('sub')}` : '') + (config_JSON.传输协议 === 'xhttp' ? '&for_subconverter=1' : ''))}&config=${encodeURIComponent(config_JSON.订阅转换配置.SUBCONFIG)}&emoji=${config_JSON.订阅转换配置.SUBEMOJI}&list=${config_JSON.订阅转换配置.SUBLIST}&scv=${config_JSON.跳过证书验证}&xudp=${config_JSON.订阅转换配置.XUDP}&udp=${config_JSON.订阅转换配置.UDP}&tls13=${config_JSON.订阅转换配置.TLS13}&append_type=${config_JSON.订阅转换配置.APPEND_TYPE}&sort=${config_JSON.订阅转换配置.SORT}&expand=${config_JSON.订阅转换配置.EXPAND}`;
 							try {
 								const response = await fetch(订阅转换URL, { headers: { 'User-Agent': 'Subconverter for ' + 订阅类型 + ' edge' + 'tunnel (https://github.com/' + 特征码字典[1] + '/edge' + 'tunnel) Uid/0x' + 本机标识头 + ' Version/' + EDT_版本号 } });
@@ -4837,6 +4846,358 @@ function log(...args) {
 	if (调试日志打印) console.log(...args);
 }
 
+/**
+ * 轻量级标准 Clash YAML 序列化工具函数
+ * 将 JavaScript 对象递归转换为符合 YAML 规范的字符串，避免引入庞大的外部依赖
+ * @param {Record<string, any>} obj 要转换的目标对象
+ * @param {number} indent 当前缩进空格数
+ * @returns {string} 格式化后的 YAML 文本
+ */
+function 序列化ClashYAML(obj, indent = 0) {
+	const spaces = ' '.repeat(indent);
+	let output = '';
+
+	const formatValue = (val, currentIndent) => {
+		if (val === null || val === undefined) return '';
+		if (typeof val === 'boolean') return val ? 'true' : 'false';
+		if (typeof val === 'number') return String(val);
+		if (typeof val === 'string') {
+			if (/[:#\[\]\{\},\s"']/.test(val) || val === '' || val === 'true' || val === 'false') {
+				return JSON.stringify(val);
+			}
+			return val;
+		}
+		if (Array.isArray(val)) {
+			if (val.length === 0) return '[]';
+			let arrStr = '\n';
+			for (const item of val) {
+				if (typeof item === 'object' && item !== null && !Array.isArray(item)) {
+					const itemSpaces = ' '.repeat(currentIndent + 2);
+					const itemEntries = Object.entries(item);
+					if (itemEntries.length === 0) {
+						arrStr += `${itemSpaces}- {}\n`;
+					} else {
+						const [firstK, firstV] = itemEntries[0];
+						arrStr += `${itemSpaces}- ${firstK}: ${formatValue(firstV, currentIndent + 4)}\n`;
+						for (let k = 1; k < itemEntries.length; k++) {
+							const [entryK, entryV] = itemEntries[k];
+							arrStr += `${' '.repeat(currentIndent + 4)}${entryK}: ${formatValue(entryV, currentIndent + 4)}\n`;
+						}
+					}
+				} else {
+					arrStr += `${' '.repeat(currentIndent + 2)}- ${formatValue(item, currentIndent + 2)}\n`;
+				}
+			}
+			return arrStr.replace(/\n$/, '');
+		}
+		if (typeof val === 'object') {
+			let objStr = '\n';
+			for (const [k, v] of Object.entries(val)) {
+				objStr += `${' '.repeat(currentIndent + 2)}${k}: ${formatValue(v, currentIndent + 2)}\n`;
+			}
+			return objStr.replace(/\n$/, '');
+		}
+		return String(val);
+	};
+
+	for (const [k, v] of Object.entries(obj)) {
+		if (typeof v === 'object' && v !== null && (Array.isArray(v) ? v.length > 0 : Object.keys(v).length > 0)) {
+			output += `${spaces}${k}:${formatValue(v, indent)}\n`;
+		} else {
+			output += `${spaces}${k}: ${formatValue(v, indent)}\n`;
+		}
+	}
+	return output;
+}
+
+/**
+ * 内置 Clash / Clash.Meta (Mihomo) 订阅生成器
+ * 在 Worker 本地直接将节点列表生成完整的 Clash 配置文件，无需依赖外部第三方 Subconverter
+ * @param {Array<{ 节点地址: string, 节点端口: string|number, 节点备注: string, 完整节点路径: string }>} 节点列表 节点信息对象数组
+ * @param {Record<string, any>} config_JSON 配置信息
+ * @param {string} requestHost 当前访问域名
+ * @returns {string} 完整的 Clash 配置 YAML
+ */
+function 生成内置Clash订阅(节点列表, config_JSON, requestHost) {
+	const uuid = '00000000-0000-4000-8000-000000000000';
+	const [本机标识头] = 获取本机标识(config_JSON?.UUID || uuid);
+	const 叉HTTPPadding = 生成叉HTTPPadding串(200);
+	const 传输协议 = config_JSON?.传输协议 || 'ws';
+	const 跳过证书验证 = Boolean(config_JSON?.跳过证书验证);
+	const fingerprint = config_JSON?.Fingerprint || 'chrome';
+	const ECH启用 = Boolean(config_JSON?.ECH);
+	const ECH_SNI = config_JSON?.ECHConfig?.SNI || 'cloudflare-ech.com';
+	const gRPCUserAgent = (typeof config_JSON?.gRPCUserAgent === 'string' && config_JSON.gRPCUserAgent.trim()) ? config_JSON.gRPCUserAgent.trim() : null;
+
+	const proxies = [];
+	const 节点名称池 = new Set();
+
+	for (const node of 节点列表) {
+		let name = node.节点备注;
+		let count = 1, finalName = name;
+		while (节点名称池.has(finalName)) {
+			finalName = `${name} (${count++})`;
+		}
+		节点名称池.add(finalName);
+
+		const proxy = {
+			name: finalName,
+			type: config_JSON.协议类型 === 'ss' ? 'ss' : (config_JSON.协议类型 === 'trojan' ? 'trojan' : 'vless'),
+			server: node.节点地址,
+			port: Number(node.节点端口) || 443,
+			uuid: uuid,
+			udp: Boolean(config_JSON?.订阅转换配置?.UDP ?? true),
+			tls: true,
+			'skip-cert-verify': 跳过证书验证,
+			servername: 'example.com',
+			'client-fingerprint': fingerprint
+		};
+
+		if (proxy.type === 'trojan') {
+			delete proxy.uuid;
+			proxy.password = uuid;
+		}
+
+		if (传输协议 === 'xhttp') {
+			proxy.network = 'xhttp';
+			proxy['xhttp-opts'] = {
+				mode: 'stream-one',
+				path: node.完整节点路径 || '/',
+				headers: {
+					[本机标识头]: 叉HTTPPadding
+				}
+			};
+			proxy['splithttp-opts'] = {
+				mode: 'stream-one',
+				path: node.完整节点路径 || '/',
+				headers: {
+					[本机标识头]: 叉HTTPPadding
+				}
+			};
+		} else if (传输协议 === 'grpc') {
+			proxy.network = 'grpc';
+			proxy['grpc-opts'] = {
+				'grpc-service-name': (node.完整节点路径 || '/').split('?')[0] || '/',
+				...(gRPCUserAgent ? { 'grpc-user-agent': gRPCUserAgent } : {})
+			};
+		} else {
+			proxy.network = 'ws';
+			proxy['ws-opts'] = {
+				path: node.完整节点路径 || '/',
+				headers: {
+					Host: 'example.com'
+				}
+			};
+		}
+
+		if (ECH启用) {
+			proxy['ech-opts'] = {
+				enable: true,
+				...(ECH_SNI ? { 'query-server-name': ECH_SNI } : {})
+			};
+		}
+
+		proxies.push(proxy);
+	}
+
+	if (config_JSON?.订阅转换配置?.SUBLIST) {
+		return 序列化ClashYAML({ proxies });
+	}
+
+	const 节点名称列表 = proxies.map(p => p.name);
+	const proxyGroups = [
+		{
+			name: '🚀 节点选择',
+			type: 'select',
+			proxies: ['♻️ 自动选择', '🔯 故障转移', '🎯 全球直连', ...节点名称列表]
+		},
+		{
+			name: '♻️ 自动选择',
+			type: 'url-test',
+			url: 'https://www.gstatic.com/generate_204',
+			interval: 300,
+			tolerance: 50,
+			proxies: [...节点名称列表]
+		},
+		{
+			name: '🔯 故障转移',
+			type: 'fallback',
+			url: 'https://www.gstatic.com/generate_204',
+			interval: 300,
+			proxies: [...节点名称列表]
+		},
+		{
+			name: '🎯 全球直连',
+			type: 'select',
+			proxies: ['DIRECT']
+		},
+		{
+			name: '🛑 全球拦截',
+			type: 'select',
+			proxies: ['REJECT', 'DIRECT']
+		},
+		{
+			name: '🐟 漏网之鱼',
+			type: 'select',
+			proxies: ['🚀 节点选择', '🎯 全球直连']
+		}
+	];
+
+	const rules = [
+		'GEOIP,private,DIRECT,no-resolve',
+		'GEOIP,lan,DIRECT,no-resolve',
+		'GEOIP,CN,DIRECT',
+		'MATCH,🚀 节点选择'
+	];
+
+	return 序列化ClashYAML({
+		port: 7890,
+		'socks-port': 7891,
+		'allow-lan': true,
+		mode: 'rule',
+		'log-level': 'info',
+		'external-controller': ':9090',
+		dns: {
+			enable: true,
+			ipv6: false,
+			'default-nameserver': ['223.5.5.5', '119.29.29.29', '114.114.114.114'],
+			nameserver: ['https://sm2.doh.pub/dns-query', 'https://dns.alidns.com/dns-query'],
+			fallback: ['8.8.4.4', '208.67.220.220'],
+			'fallback-filter': {
+				geoip: true,
+				'geoip-code': 'CN',
+				ipcidr: ['240.0.0.0/4', '127.0.0.1/32', '0.0.0.0/32'],
+				domain: ['+.google.com', '+.facebook.com', '+.youtube.com']
+			}
+		},
+		proxies,
+		'proxy-groups': proxyGroups,
+		rules
+	});
+}
+
+/**
+ * 内置 Sing-box 订阅生成器
+ * 在 Worker 本地直接生成合法的 Sing-box 1.8+ / 1.10+ JSON 配置
+ * @param {Array<{ 节点地址: string, 节点端口: string|number, 节点备注: string, 完整节点路径: string }>} 节点列表 节点信息对象数组
+ * @param {Record<string, any>} config_JSON 配置信息
+ * @param {string} requestHost 当前访问域名
+ * @returns {string} 完整的 Sing-box 配置 JSON
+ */
+function 生成内置Singbox订阅(节点列表, config_JSON, requestHost) {
+	const uuid = '00000000-0000-4000-8000-000000000000';
+	const [本机标识头] = 获取本机标识(config_JSON?.UUID || uuid);
+	const 叉HTTPPadding = 生成叉HTTPPadding串(200);
+	const 传输协议 = config_JSON?.传输协议 || 'ws';
+	const fingerprint = config_JSON?.Fingerprint || 'chrome';
+
+	const outbounds = [];
+	const tags = [];
+
+	for (const node of 节点列表) {
+		const tag = node.节点备注;
+		tags.push(tag);
+
+		const outbound = {
+			type: config_JSON.协议类型 === 'trojan' ? 'trojan' : 'vless',
+			tag: tag,
+			server: node.节点地址,
+			server_port: Number(node.节点端口) || 443,
+			uuid: uuid,
+			tls: {
+				enabled: true,
+				server_name: 'example.com',
+				insecure: Boolean(config_JSON?.跳过证书验证),
+				utls: {
+					enabled: true,
+					fingerprint: fingerprint
+				}
+			}
+		};
+
+		if (outbound.type === 'trojan') {
+			delete outbound.uuid;
+			outbound.password = uuid;
+		}
+
+		if (传输协议 === 'xhttp') {
+			outbound.transport = {
+				type: 'http',
+				path: node.完整节点路径 || '/',
+				method: 'POST',
+				headers: {
+					[本机标识头]: 叉HTTPPadding
+				}
+			};
+		} else if (传输协议 === 'grpc') {
+			outbound.transport = {
+				type: 'grpc',
+				service_name: (node.完整节点路径 || '/').split('?')[0] || '/'
+			};
+		} else {
+			outbound.transport = {
+				type: 'ws',
+				path: node.完整节点路径 || '/',
+				headers: {
+					Host: 'example.com'
+				}
+			};
+		}
+
+		outbounds.push(outbound);
+	}
+
+	if (config_JSON?.订阅转换配置?.SUBLIST) {
+		return JSON.stringify({ outbounds }, null, 2);
+	}
+
+	const fullConfig = {
+		dns: {
+			servers: [
+				{ tag: 'dns_proxy', address: 'https://1.1.1.1/dns-query', address_resolver: 'dns_direct', detour: '🚀 节点选择' },
+				{ tag: 'dns_direct', address: '223.5.5.5', detour: 'direct' }
+			],
+			rules: [
+				{ outbound: 'any', server: 'dns_direct' },
+				{ clash_mode: 'Global', server: 'dns_proxy' },
+				{ clash_mode: 'Direct', server: 'dns_direct' },
+				{ geosite: 'cn', server: 'dns_direct' }
+			],
+			strategy: 'prefer_ipv4'
+		},
+		inbounds: [
+			{ type: 'mixed', tag: 'mixed-in', listen: '127.0.0.1', listen_port: 2080 }
+		],
+		outbounds: [
+			{
+				type: 'selector',
+				tag: '🚀 节点选择',
+				outbounds: ['♻️ 自动选择', 'direct', ...tags]
+			},
+			{
+				type: 'urltest',
+				tag: '♻️ 自动选择',
+				outbounds: [...tags],
+				url: 'https://www.gstatic.com/generate_204',
+				interval: '3m'
+			},
+			...outbounds,
+			{ type: 'direct', tag: 'direct' },
+			{ type: 'block', tag: 'block' }
+		],
+		route: {
+			rules: [
+				{ geoip: 'private', outbound: 'direct' },
+				{ geosite: 'cn', outbound: 'direct' },
+				{ geoip: 'cn', outbound: 'direct' }
+			],
+			auto_detect_interface: true
+		}
+	};
+
+	return JSON.stringify(fullConfig, null, 2);
+}
+
 function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON = {}) {
 	const uuid = config_JSON?.UUID || null;
 	const ECH启用 = Boolean(config_JSON?.ECH);
@@ -5734,6 +6095,7 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 			TOKEN: await MD5MD5(hostname + userID),
 		},
 		订阅转换配置: {
+			内置转换: true, // 优先使用 Worker 内置订阅转换，无需依赖外部第三方 Subconverter
 			SUBAPI: `https://SUBAPI.${特征码字典[1]}ssss.net`,
 			SUBCONFIG: `https://raw.githubusercontent.com/${特征码字典[1]}/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Mini_MultiMode_CF.ini`,
 			SUBEMOJI: false,
@@ -5811,6 +6173,7 @@ async function 读取config_JSON(env, hostname, userID, UA = "Mozilla/5.0", 重�
 		config_JSON = 默认配置JSON;
 	}
 
+	if (typeof config_JSON.订阅转换配置.内置转换 !== 'boolean') config_JSON.订阅转换配置.内置转换 = true;
 	if (!config_JSON.订阅转换配置.SUBLIST) config_JSON.订阅转换配置.SUBLIST = false;
 	if (!config_JSON.订阅转换配置.UDP) config_JSON.订阅转换配置.UDP = false;
 	if (!config_JSON.订阅转换配置.XUDP) config_JSON.订阅转换配置.XUDP = false;
