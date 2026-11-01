@@ -476,9 +476,9 @@ export default {
 
 							// 本地内置转换输出对应格式
 							if (订阅类型 === 'clash') {
-								订阅内容 = 生成内置Clash订阅(结构化节点列表, config_JSON, host);
+								订阅内容 = 生成内置Clash订阅(结构化节点列表, config_JSON, host, url);
 							} else if (订阅类型 === 'singbox') {
-								订阅内容 = 生成内置Singbox订阅(结构化节点列表, config_JSON, host);
+								订阅内容 = 生成内置Singbox订阅(结构化节点列表, config_JSON, host, url);
 							} else {
 								订阅内容 = 其他节点LINK + 原始节点URI列表.join('\n');
 							}
@@ -514,10 +514,14 @@ export default {
 						if (订阅类型 === 'mixed' && (!ua.includes('mozilla') || url.searchParams.has('b64') || url.searchParams.has('base64'))) 订阅内容 = btoa(订阅内容);
 
 						if (订阅类型 === 'singbox') {
-							订阅内容 = await Singbox订阅配置文件热补丁(订阅内容, config_JSON);
+							if (!走内置转换) {
+								订阅内容 = await Singbox订阅配置文件热补丁(订阅内容, config_JSON);
+							}
 							responseHeaders["content-type"] = 'application/json; charset=utf-8';
 						} else if (订阅类型 === 'clash') {
-							订阅内容 = Clash订阅配置文件热补丁(订阅内容, config_JSON);
+							if (!走内置转换) {
+								订阅内容 = Clash订阅配置文件热补丁(订阅内容, config_JSON);
+							}
 							responseHeaders["content-type"] = 'application/x-yaml; charset=utf-8';
 						}
 						return new Response(订阅内容, { status: 200, headers: responseHeaders });
@@ -4932,7 +4936,7 @@ function 序列化ClashYAML(obj, indent = 0) {
  * @param {string} requestHost 当前访问域名
  * @returns {string} 完整的 Clash 配置 YAML
  */
-function 生成内置Clash订阅(节点列表, config_JSON, requestHost) {
+function 生成内置Clash订阅(节点列表, config_JSON, requestHost, url) {
 	const uuid = '00000000-0000-4000-8000-000000000000';
 	const [本机标识头] = 获取本机标识(config_JSON?.UUID || uuid);
 	const 叉HTTPPadding = 生成叉HTTPPadding串(200);
@@ -5014,7 +5018,8 @@ function 生成内置Clash订阅(节点列表, config_JSON, requestHost) {
 		proxies.push(proxy);
 	}
 
-	if (config_JSON?.订阅转换配置?.SUBLIST) {
+	const 仅输出节点 = url?.searchParams?.get('list') === 'true' || url?.searchParams?.get('sublist') === 'true';
+	if (仅输出节点) {
 		return 序列化ClashYAML({ proxies });
 	}
 
@@ -5064,6 +5069,30 @@ function 生成内置Clash订阅(节点列表, config_JSON, requestHost) {
 		'MATCH,🚀 节点选择'
 	];
 
+	const dnsConfig = {
+		enable: true,
+		ipv6: false,
+		'default-nameserver': ['223.5.5.5', '119.29.29.29', '114.114.114.114'],
+		nameserver: ['https://sm2.doh.pub/dns-query', 'https://dns.alidns.com/dns-query'],
+		fallback: ['8.8.4.4', '208.67.220.220'],
+		'fallback-filter': {
+			geoip: true,
+			'geoip-code': 'CN',
+			ipcidr: ['240.0.0.0/4', '127.0.0.1/32', '0.0.0.0/32'],
+			domain: ['+.google.com', '+.facebook.com', '+.youtube.com']
+		}
+	};
+
+	if (ECH启用) {
+		const echDns = config_JSON?.ECHConfig?.DNS || 'https://dns.alidns.com/dns-query';
+		dnsConfig['nameserver-policy'] = {
+			'example.com': echDns
+		};
+		if (ECH_SNI) {
+			dnsConfig['nameserver-policy'][ECH_SNI] = echDns;
+		}
+	}
+
 	return 序列化ClashYAML({
 		port: 7890,
 		'socks-port': 7891,
@@ -5071,19 +5100,7 @@ function 生成内置Clash订阅(节点列表, config_JSON, requestHost) {
 		mode: 'rule',
 		'log-level': 'info',
 		'external-controller': ':9090',
-		dns: {
-			enable: true,
-			ipv6: false,
-			'default-nameserver': ['223.5.5.5', '119.29.29.29', '114.114.114.114'],
-			nameserver: ['https://sm2.doh.pub/dns-query', 'https://dns.alidns.com/dns-query'],
-			fallback: ['8.8.4.4', '208.67.220.220'],
-			'fallback-filter': {
-				geoip: true,
-				'geoip-code': 'CN',
-				ipcidr: ['240.0.0.0/4', '127.0.0.1/32', '0.0.0.0/32'],
-				domain: ['+.google.com', '+.facebook.com', '+.youtube.com']
-			}
-		},
+		dns: dnsConfig,
 		proxies,
 		'proxy-groups': proxyGroups,
 		rules
@@ -5098,7 +5115,7 @@ function 生成内置Clash订阅(节点列表, config_JSON, requestHost) {
  * @param {string} requestHost 当前访问域名
  * @returns {string} 完整的 Sing-box 配置 JSON
  */
-function 生成内置Singbox订阅(节点列表, config_JSON, requestHost) {
+function 生成内置Singbox订阅(节点列表, config_JSON, requestHost, url) {
 	const uuid = '00000000-0000-4000-8000-000000000000';
 	const [本机标识头] = 获取本机标识(config_JSON?.UUID || uuid);
 	const 叉HTTPPadding = 生成叉HTTPPadding串(200);
@@ -5395,6 +5412,7 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 		return nodeLines;
 	};
 	const 添加Block格式ECHOpts = (nodeLines, topLevelIndent) => {
+		if (nodeLines.some(l => /^\s*ech-opts:\s*/i.test(l))) return nodeLines;
 		let insertIndex = -1;
 		for (let j = nodeLines.length - 1; j >= 0; j--) {
 			if (nodeLines[j].trim()) {
