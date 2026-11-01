@@ -456,7 +456,8 @@ export default {
 								}
 								if (isLoonOrSurge) 完整节点路径 = 完整节点路径.replace(/,/g, '%2C');
 
-								结构化节点列表.push({ 节点地址, 节点端口, 节点备注, 完整节点路径 });
+								const 传输路径参数值 = 获取传输路径参数值(config_JSON, 完整节点路径, 作为优选订阅生成器);
+								结构化节点列表.push({ 节点地址, 节点端口, 节点备注, 完整节点路径: 传输路径参数值 });
 
 								if (协议类型 === 'ss' && !作为优选订阅生成器) {
 									let 实际端口 = 节点端口;
@@ -469,7 +470,6 @@ export default {
 									if (!isSubConverterRequest) ss路径 = ss路径 + ';mux=0';
 									原始节点URI列表.push(`${协议类型}://${btoa(config_JSON.SS.加密方式 + ':00000000-0000-4000-8000-000000000000')}@${节点地址}:${实际端口}?plugin=v2${encodeURIComponent('ray-plugin;mode=websocket;host=example.com;path=' + (config_JSON.随机路径 ? 随机路径(ss路径) : ss路径) + (config_JSON.SS.TLS ? ';tls' : '')) + ECHLINK参数 + TLS分片参数}#${encodeURIComponent(节点备注)}`);
 								} else {
-									const 传输路径参数值 = 获取传输路径参数值(config_JSON, 完整节点路径, 作为优选订阅生成器);
 									原始节点URI列表.push(`${协议类型}://00000000-0000-4000-8000-000000000000@${节点地址}:${节点端口}?security=tls&type=${传输协议 + ECHLINK参数}&${域名字段名}=example.com&fp=${config_JSON.Fingerprint}&sni=example.com&${路径字段名}=${encodeURIComponent(传输路径参数值) + TLS分片参数}&encryption=none&alpn=${encodeURIComponent(config_JSON.ALPN)}#${encodeURIComponent(节点备注)}`);
 								}
 							}
@@ -4938,7 +4938,7 @@ function 序列化ClashYAML(obj, indent = 0) {
  */
 function 生成内置Clash订阅(节点列表, config_JSON, requestHost, url) {
 	const uuid = '00000000-0000-4000-8000-000000000000';
-	const [本机标识头] = 获取本机标识(config_JSON?.UUID || uuid);
+	const [本机标识头, 本机标识键] = 获取本机标识(config_JSON?.UUID || uuid);
 	const 叉HTTPPadding = 生成叉HTTPPadding串(200);
 	const 传输协议 = config_JSON?.传输协议 || 'ws';
 	const 跳过证书验证 = Boolean(config_JSON?.跳过证书验证);
@@ -4971,6 +4971,12 @@ function 生成内置Clash订阅(节点列表, config_JSON, requestHost, url) {
 			'client-fingerprint': fingerprint
 		};
 
+		if (config_JSON?.ALPN && typeof config_JSON.ALPN === 'string' && config_JSON.ALPN.trim()) {
+			proxy.alpn = config_JSON.ALPN.split(',').map(s => s.trim()).filter(Boolean);
+		} else if (传输协议 === 'xhttp') {
+			proxy.alpn = ['h2', 'http/1.1'];
+		}
+
 		if (proxy.type === 'trojan') {
 			delete proxy.uuid;
 			proxy.password = uuid;
@@ -4980,16 +4986,34 @@ function 生成内置Clash订阅(节点列表, config_JSON, requestHost, url) {
 			proxy.network = 'xhttp';
 			proxy['xhttp-opts'] = {
 				mode: 'stream-one',
+				host: 'example.com',
 				path: node.完整节点路径 || '/',
 				headers: {
+					Host: 'example.com',
 					[本机标识头]: 叉HTTPPadding
+				},
+				extra: {
+					xPaddingObfsMode: true,
+					xPaddingMethod: 'tokenish',
+					xPaddingPlacement: 'queryInHeader',
+					xPaddingHeader: 本机标识头,
+					xPaddingKey: 本机标识键
 				}
 			};
 			proxy['splithttp-opts'] = {
 				mode: 'stream-one',
+				host: 'example.com',
 				path: node.完整节点路径 || '/',
 				headers: {
+					Host: 'example.com',
 					[本机标识头]: 叉HTTPPadding
+				},
+				extra: {
+					xPaddingObfsMode: true,
+					xPaddingMethod: 'tokenish',
+					xPaddingPlacement: 'queryInHeader',
+					xPaddingHeader: 本机标识头,
+					xPaddingKey: 本机标识键
 				}
 			};
 		} else if (传输协议 === 'grpc') {
@@ -5154,9 +5178,11 @@ function 生成内置Singbox订阅(节点列表, config_JSON, requestHost, url) 
 		if (传输协议 === 'xhttp') {
 			outbound.transport = {
 				type: 'http',
+				host: ['example.com'],
 				path: node.完整节点路径 || '/',
 				method: 'POST',
 				headers: {
+					Host: 'example.com',
 					[本机标识头]: 叉HTTPPadding
 				}
 			};
@@ -5437,7 +5463,7 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 		nodeText = nodeText.replace(/,?\s*ws-opts:\s*\{[^}]*\}/i, '');
 		nodeText = nodeText.replace(/,?\s*xhttp-opts:\s*\{[^}]*\}/i, '');
 		nodeText = nodeText.replace(/,?\s*splithttp-opts:\s*\{[^}]*\}/i, '');
-		const optsContent = `mode: stream-one, path: "${xhttpPath}", headers: {${本机标识头}: "${叉HTTPPadding}"}`;
+		const optsContent = `mode: stream-one, host: "example.com", path: "${xhttpPath}", headers: {Host: "example.com", ${本机标识头}: "${叉HTTPPadding}"}`;
 		return nodeText.replace(/\}(\s*)$/, `, xhttp-opts: {${optsContent}}, splithttp-opts: {${optsContent}}}$1`);
 	};
 	const 添加Block格式XHTTP = (nodeLines, topLevelIndent) => {
@@ -5484,13 +5510,17 @@ function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON 
 		const xhttpLines = [
 			`${顶级缩进}xhttp-opts:`,
 			`${子级缩进}mode: stream-one`,
+			`${子级缩进}host: "example.com"`,
 			`${子级缩进}path: "${xhttpPath}"`,
 			`${子级缩进}headers:`,
+			`${三级缩进}Host: "example.com"`,
 			`${三级缩进}${本机标识头}: "${叉HTTPPadding}"`,
 			`${顶级缩进}splithttp-opts:`,
 			`${子级缩进}mode: stream-one`,
+			`${子级缩进}host: "example.com"`,
 			`${子级缩进}path: "${xhttpPath}"`,
 			`${子级缩进}headers:`,
+			`${三级缩进}Host: "example.com"`,
 			`${三级缩进}${本机标识头}: "${叉HTTPPadding}"`
 		];
 		if (insertIndex >= 0) {
