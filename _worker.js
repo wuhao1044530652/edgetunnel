@@ -297,7 +297,21 @@ export default {
 					}
 
 					ctx.waitUntil(请求日志记录(env, request, 访问IP, 'Admin_Login', config_JSON));
-					return fetch(Pages静态页面 + '/admin' + url.search);
+					try {
+						const 静态响应 = await fetch(Pages静态页面 + '/admin' + url.search);
+						let html = await 静态响应.text();
+						html = 注入管理面板内置订阅选项(html);
+						const 响应头 = new Headers(静态响应.headers);
+						响应头.set('Content-Type', 'text/html; charset=utf-8');
+						响应头.delete('Content-Length');
+						响应头.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+						return new Response(html, {
+							status: 静态响应.status,
+							headers: 响应头
+						});
+					} catch (e) {
+						return fetch(Pages静态页面 + '/admin' + url.search);
+					}
 				} else if (访问路径 === 'logout' || uuidRegex.test(访问路径)) {//清除cookie并跳转到登录页面
 					const 响应 = new Response('重定向中...', { status: 302, headers: { 'Location': '/login' } });
 					响应.headers.set('Set-Cookie', 'auth=; Path=/; Max-Age=0; HttpOnly');
@@ -5196,6 +5210,54 @@ function 生成内置Singbox订阅(节点列表, config_JSON, requestHost) {
 	};
 
 	return JSON.stringify(fullConfig, null, 2);
+}
+
+/**
+ * 注入管理面板内置订阅转换选项
+ * 拦截静态后台 HTML，在“订阅转换配置”中注入“内置订阅转换”勾选框及前后端联动脚本
+ * @param {string} html 原始管理页面 HTML 内容
+ * @returns {string} 注入增强后的 HTML 内容
+ */
+function 注入管理面板内置订阅选项(html) {
+	if (!html || typeof html !== 'string') return html;
+
+	// 1. 注入复选框 DOM 元素（置于 Emoji 之前）
+	const targetGroup = '<div class="form-group" id="emojiGroup">';
+	const injectedCheckbox = `<div class="form-group" id="internalSubGroup">
+							<div class="input-wrapper">
+								<div class="checkbox-group">
+									<input type="checkbox" id="internalSub" title="启用 Worker 内置订阅转换，不依赖外部第三方后端"
+										onchange="markModified('convert')">
+									<label for="internalSub" class="checkbox-label"
+										title="启用 Worker 内置订阅转换，不依赖外部第三方后端">内置订阅转换</label>
+								</div>
+							</div>
+						</div>\n\t\t\t\t\t\t`;
+	if (html.includes(targetGroup) && !html.includes('id="internalSub"')) {
+		html = html.replace(targetGroup, injectedCheckbox + targetGroup);
+	}
+
+	// 2. 注入 syncSubListOption 中的回显状态同步逻辑
+	const syncTarget = 'function syncSubListOption() {';
+	const injectedSync = `function syncSubListOption() {
+			const internalSubEl = document.getElementById('internalSub');
+			if (internalSubEl) {
+				internalSubEl.checked = currentConfig.订阅转换配置?.内置转换 !== undefined
+					? (currentConfig.订阅转换配置.内置转换 === true || currentConfig.订阅转换配置.内置转换 === 'true')
+					: true;
+			}`;
+	if (html.includes(syncTarget) && !html.includes('internalSubEl')) {
+		html = html.replace(syncTarget, injectedSync);
+	}
+
+	// 3. 注入 saveConvert 中的表单数据读取与保存逻辑
+	const saveTarget = "SUBEMOJI: document.getElementById('emoji').checked";
+	const injectedSave = "SUBEMOJI: document.getElementById('emoji').checked,\n\t\t\t\t内置转换: document.getElementById('internalSub') ? document.getElementById('internalSub').checked : true";
+	if (html.includes(saveTarget) && !html.includes('内置转换: document.getElementById')) {
+		html = html.replace(saveTarget, injectedSave);
+	}
+
+	return html;
 }
 
 function Clash订阅配置文件热补丁(Clash_原始订阅内容, config_JSON = {}) {
