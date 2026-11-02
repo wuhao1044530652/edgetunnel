@@ -1,4 +1,4 @@
-const Version = '2026-11-02 03:55:00';
+const Version = '2026-11-02 16:50:00';
 let config_JSON, 缓存SOCKS5白名单 = null, 调试日志打印 = false;
 let SOCKS5白名单 = ['*tapecontent.net', '*cloudatacdn.com', '*loadshare.org', '*cdn-centaurus.com', 'scholar.google.com'];
 const Pages静态页面 = 'https://edt-pages.github.io', EDT_版本号 = Number(String(Version).replace(/\D+/g, ''));
@@ -6,7 +6,29 @@ const Pages静态页面 = 'https://edt-pages.github.io', EDT_版本号 = Number(
 const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Math.ceil(WS早期数据最大字节 * 4 / 3) + 4;
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
-let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false, TCP连接超时毫秒 = 3500;
+const 默认内置优选IP列表 = [
+	'172.64.229.1#CF官方优选1',
+	'172.64.229.102#CF官方优选2',
+	'172.64.229.106#CF官方优选3',
+	'172.64.229.11#CF官方优选4',
+	'172.64.229.115#CF官方优选5',
+	'172.64.229.127#CF官方优选6',
+	'172.64.229.130#CF官方优选7',
+	'172.64.229.137#CF官方优选8',
+	'172.64.229.145#CF官方优选9',
+	'172.64.229.156#CF官方优选10',
+	'172.64.229.161#CF官方优选11',
+	'172.64.229.164#CF官方优选12',
+	'172.64.229.17#CF官方优选13',
+	'172.64.229.171#CF官方优选14',
+	'172.64.229.173#CF官方优选15',
+	'172.64.229.179#CF官方优选16',
+	'172.64.229.182#CF官方优选17',
+	'172.64.229.184#CF官方优选18',
+	'172.64.229.189#CF官方优选19',
+	'172.64.229.19#CF官方优选20'
+];
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -40,6 +62,7 @@ export default {
 		预加载竞速拨号 = ['1', 'true'].includes(env.PRELOAD_RACE_DIAL) || 预加载竞速拨号;
 		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
 		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
+		TCP连接超时毫秒 = Math.max(1000, Number(env.TCP_CONNECT_TIMEOUT) || TCP连接超时毫秒);
 		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
 		// 默认纯直连模式：不使用第三方默认反代，仅在显式配置 PROXYIP 环境变量时启用反代
 		let 默认反代IP = '', 默认反代兜底 = false;
@@ -289,8 +312,8 @@ export default {
 					} else if (访问路径 === 'admin/config.json') {// 处理 admin/config.json 请求，返回JSON
 						return new Response(JSON.stringify(config_JSON, null, 2), { status: 200, headers: { 'Content-Type': 'application/json' } });
 					} else if (区分大小写访问路径 === 'admin/ADD.txt') {// 处理 admin/ADD.txt 请求，返回本地优选IP
-						let 本地优选IP = await env.KV.get('ADD.txt') || 'null';
-						if (本地优选IP == 'null') 本地优选IP = (await 生成随机IP(request, config_JSON.优选订阅生成.本地IP库.随机数量, config_JSON.优选订阅生成.本地IP库.指定端口))[1];
+						let 本地优选IP = env.KV ? await env.KV.get('ADD.txt') : null;
+						if (!本地优选IP || 本地优选IP === 'null') 本地优选IP = 默认内置优选IP列表.join('\n');
 						return new Response(本地优选IP, { status: 200, headers: { 'Content-Type': 'text/plain;charset=utf-8', 'asn': request.cf.asn } });
 					} else if (访问路径 === 'admin/cf.json') {// CF配置文件
 						return new Response(JSON.stringify(request.cf, null, 2), { status: 200, headers: { 'Content-Type': 'application/json;charset=utf-8' } });
@@ -372,11 +395,17 @@ export default {
 							let 完整优选IP = [], 其他节点LINK = '', 反代IP池 = [];
 
 							if (!url.searchParams.has('sub') && config_JSON.优选订阅生成.local) { // 本地生成订阅
-								const 完整优选列表 = config_JSON.优选订阅生成.本地IP库.随机IP ? (
-									await 生成随机IP(request, config_JSON.优选订阅生成.本地IP库.随机数量, config_JSON.优选订阅生成.本地IP库.指定端口)
-								)[0] : await env.KV.get('ADD.txt') ? await 整理成数组(await env.KV.get('ADD.txt')) : (
-									await 生成随机IP(request, config_JSON.优选订阅生成.本地IP库.随机数量, config_JSON.优选订阅生成.本地IP库.指定端口)
-								)[0];
+								let 完整优选列表 = [];
+								if (config_JSON.优选订阅生成.本地IP库.随机IP) {
+									完整优选列表 = (await 生成随机IP(request, config_JSON.优选订阅生成.本地IP库.随机数量, config_JSON.优选订阅生成.本地IP库.指定端口))[0];
+								} else {
+									const kvAdd = env.KV ? await env.KV.get('ADD.txt') : null;
+									if (kvAdd) {
+										完整优选列表 = await 整理成数组(kvAdd);
+									} else {
+										完整优选列表 = [...默认内置优选IP列表];
+									}
+								}
 								const 优选API = [], 优选IP = [], 其他节点 = [];
 								for (const 元素 of 完整优选列表) {
 									if (元素.toLowerCase().startsWith('sub://')) {
@@ -2208,7 +2237,7 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 	const ctx反代兜底 = 反代上下文.反代兜底 !== undefined ? 反代上下文.反代兜底 : true;
 	let 反代数组索引 = 0;
 	log(`[TCP转发] 目标: ${host}:${portNum} | 反代IP: ${ctx反代IP} | 反代兜底: ${ctx反代兜底 ? '是' : '否'} | 反代类型: ${ctx代理类型 || 'proxyip'} | 全局: ${ctx代理全局 ? '是' : '否'}`);
-	const 连接超时毫秒 = 1000;
+	const 连接超时毫秒 = TCP连接超时毫秒;
 	let 已通过代理发送首包 = false;
 	const TCP连接 = 创建请求TCP连接器(request);
 	const 使用木马反代 = 允许木马反代 && (反代上下文.木马反代地址 || null);
